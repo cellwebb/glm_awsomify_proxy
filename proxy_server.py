@@ -23,7 +23,7 @@ TARGET_API_HOST = "https://api.cerebras.ai/v1/"
 ROTATE_KEY_ERROR_CODES = {429, 500}
 
 # Request/Response logging configuration
-LOG_REQUESTS_ENABLED = os.environ.get("LOG_REQUESTS", "false").lower() == "true"
+LOG_REQUESTS_ENABLED = True  # Logging is always enabled
 LOG_DIR = os.environ.get("LOG_DIR", "./logs")
 
 

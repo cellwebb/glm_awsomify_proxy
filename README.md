@@ -17,7 +17,7 @@ This is a Python-based proxy server designed to forward requests to the Cerebras
   - Waits for the next available key instead of immediately failing
 - **Concurrency Support**: Built with `aiohttp` to efficiently handle multiple concurrent requests with thread-safe key rotation.
 - **Status Monitoring**: Built-in `/_status` endpoint to monitor API key health and rotation state.
-- **Request/Response Logging**: Optional filesystem logging to save all requests and responses as JSON files for auditing, debugging, or analysis.
+- **Request/Response Logging**: Filesystem logging to save all requests and responses as JSON files for auditing, debugging, or analysis.
 
 ## Requirements
 
@@ -59,13 +59,6 @@ Example JSON format:
 Example:
 ```bash
 CEREBRAS_COOLDOWN=90
-```
-
-**`LOG_REQUESTS`**: Enable request/response logging to filesystem (default: false)
-
-Example:
-```bash
-LOG_REQUESTS=true
 ```
 
 **`LOG_DIR`**: Directory to save request/response logs (default: ./logs)
@@ -193,16 +186,11 @@ Example response:
 
 ## Request/Response Logging
 
-The proxy includes optional filesystem logging to save all requests and responses for auditing, debugging, or analysis purposes.
+The proxy includes filesystem logging that is always enabled to save all requests and responses for auditing, debugging, or analysis purposes.
 
-### Enabling Logging
+### Configuring Log Directory
 
-Set the `LOG_REQUESTS` environment variable to `true`:
-```bash
-export LOG_REQUESTS=true
-```
-
-Optionally, specify a custom log directory:
+By default, logs are saved to `./logs`. You can specify a custom log directory:
 ```bash
 export LOG_DIR=/var/log/cerebras-proxy
 ```
