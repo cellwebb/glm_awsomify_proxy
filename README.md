@@ -4,11 +4,19 @@ This is a Python-based proxy server designed to forward requests to the Cerebras
 
 ## Features
 
-- **API Key Management**: Accepts a JSON configuration of API keys and manages them for round-robin rotation.
+- **Smart API Key Management**:
+  - Sticks with one key until it hits rate limits (429 errors)
+  - Automatically switches to the next available key only when needed
+  - Tracks cooldown periods for each key
+  - **Waits and retries** if all keys are rate-limited instead of failing immediately
 - **Request Forwarding**: Forwards all incoming HTTP requests to the Cerebras API endpoint (`https://api.cerebras.ai/v1/`).
-- **Dynamic Authorization**: Injects the `Authorization: Bearer <api_key>` header dynamically for each request using the current key in rotation.
-- **Error Handling & Retry**: Automatically rotates keys and retries requests on receiving `429 Too Many Requests` or `500 Internal Server Error` responses.
+- **Dynamic Authorization**: Injects the `Authorization: Bearer <api_key>` header dynamically for each request using the current key.
+- **Intelligent Error Handling**:
+  - Automatically rotates keys on `429 Too Many Requests` or `500 Internal Server Error` responses
+  - Marks keys as temporarily unavailable and tracks when they can be retried
+  - Waits for the next available key instead of immediately failing
 - **Concurrency Support**: Built with `aiohttp` to efficiently handle multiple concurrent requests with thread-safe key rotation.
+- **Status Monitoring**: Built-in `/_status` endpoint to monitor API key health and rotation state.
 
 ## Requirements
 
@@ -28,7 +36,11 @@ pip install -r requirements.txt
 
 ## Configuration
 
-The proxy server expects a JSON string containing your Cerebras API keys to be provided via the `CEREBRAS_API_KEYS` environment variable.
+The proxy server uses environment variables for configuration:
+
+### Required Configuration
+
+**`CEREBRAS_API_KEYS`**: JSON string containing your Cerebras API keys.
 
 Example JSON format:
 ```json
@@ -37,6 +49,15 @@ Example JSON format:
   "key2": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
   "key3": "sk-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
 }
+```
+
+### Optional Configuration
+
+**`CEREBRAS_COOLDOWN`**: Number of seconds to wait before retrying a rate-limited key (default: 60)
+
+Example:
+```bash
+CEREBRAS_COOLDOWN=90
 ```
 
 ## Usage
@@ -94,21 +115,108 @@ The proxy will be available at `http://localhost:18080`.
    ```
    POST http://127.0.0.1:8080/chat/completions
    ```
-   
+
    The proxy will handle adding the appropriate `Authorization` header.
+
+## How Smart Rotation Works
+
+Unlike traditional round-robin proxies that switch keys on every request, this proxy uses intelligent key management:
+
+1. **Sticky Keys**: The proxy sticks with one key and uses it for all requests until it encounters a problem
+2. **Smart Switching**: Only rotates to the next key when receiving a 429 (rate limit) or 500 (server error)
+3. **Cooldown Tracking**: Remembers when each key was rate-limited and won't try it again until the cooldown expires
+4. **Automatic Waiting**: If all keys are rate-limited, the proxy waits for the soonest available key instead of failing
+5. **State Persistence**: The current key position is maintained across requests, so you don't always start with key1
+
+**Example Flow:**
+```
+Request 1-100:   Uses key1 (all successful)
+Request 101:     key1 hits rate limit → switches to key2
+Request 102-200: Uses key2 (all successful)
+Request 201:     key2 hits rate limit → switches to key3
+Request 202:     key3 hits rate limit → waits for key1 cooldown to expire
+Request 203-300: Uses key1 again (cooldown expired)
+```
+
+## Monitoring
+
+The proxy provides a built-in status endpoint to monitor API key health and rotation state.
+
+### Status Endpoint
+
+Access the status endpoint at:
+```
+GET http://localhost:18080/_status
+```
+
+Example response:
+```json
+{
+  "keys": [
+    {
+      "name": "key1",
+      "available": true,
+      "rate_limited_for": 0,
+      "error_count": 0
+    },
+    {
+      "name": "key2",
+      "available": false,
+      "rate_limited_for": 45.2,
+      "error_count": 3
+    }
+  ],
+  "current_key": "key1"
+}
+```
+
+**Fields:**
+- `available`: Whether the key is currently available for use
+- `rate_limited_for`: Seconds remaining until the key can be retried (0 if available)
+- `error_count`: Number of consecutive errors for this key
+- `current_key`: Name of the key currently being used
 
 ## Architecture
 
 This proxy server is built using the `aiohttp` framework for high performance and concurrency. It consists of two main components:
 
-1.  **`ApiKeyManager` (`api_key_manager.py`)**: Manages the pool of API keys, rotating through them in a round-robin fashion. It uses an `asyncio.Lock` to ensure that key rotation is thread-safe when handling multiple concurrent requests.
-2.  **`ProxyServer` (`proxy_server.py`)**: The main application that listens for HTTP requests. It has a catch-all route that forwards requests to the Cerebras API. It integrates with the `ApiKeyManager` to retrieve keys for the `Authorization` header and implements a retry loop for handling specific error responses.
+1.  **`ApiKeyManager` (`api_key_manager.py`)**: Manages the pool of API keys with intelligent rotation:
+    - Tracks each key's state (available vs. rate-limited)
+    - Maintains the current active key instead of rotating on every request
+    - Only switches keys when a rate limit (429) or server error (500) is encountered
+    - Implements automatic wait/retry when all keys are temporarily unavailable
+    - Uses `asyncio.Lock` for thread-safe operation across concurrent requests
+
+2.  **`ProxyServer` (`proxy_server.py`)**: The main application that listens for HTTP requests:
+    - Catch-all route forwards requests to the Cerebras API
+    - Integrates with `ApiKeyManager` to get the current key and handle rotation
+    - Automatically retries with the next available key on failures
+    - Provides a `/_status` endpoint for monitoring key health
 
 ## Error Handling
 
-- If a request to the Cerebras API fails with a `429` or `500` status code, the proxy will rotate to the next available API key and retry the original request. This process is repeated until a successful response is received or all keys have been tried.
-- If all keys are exhausted (i.e., all have returned a `429` or `500` error) for a specific request, the proxy will return a `503 Service Unavailable` response to the client.
-- If the request to the Cerebras API fails with any other error code, or if there's a network or client error during the proxy process itself, the appropriate error response will be returned to the client (often a `502 Bad Gateway` or `500 Internal Server Error`).
+The proxy implements smart error handling with automatic recovery:
+
+- **Rate Limiting (429)**: When a key hits rate limits:
+  1. The key is marked as unavailable with a cooldown period (default 60 seconds)
+  2. The proxy automatically switches to the next available key
+  3. The request is retried immediately with the new key
+  4. After the cooldown period, the key becomes available again
+
+- **Server Errors (500)**: Treated similarly to rate limits:
+  1. Key is marked as temporarily unavailable
+  2. Automatic rotation to the next available key
+  3. Request retry with the new key
+
+- **All Keys Rate-Limited**: If all keys are temporarily unavailable:
+  1. The proxy calculates which key will become available soonest
+  2. Waits for that cooldown period
+  3. Automatically retries the request when a key becomes available
+  4. No immediate `503` error - the proxy handles waiting for you
+
+- **Other Errors**: Non-retryable errors (4xx client errors, network issues) are returned to the client immediately
+
+- **Maximum Retries**: After (number of keys × 2) attempts, returns `503 Service Unavailable`
 
 ## License
 

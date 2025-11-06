@@ -9,3 +9,4 @@ services:
       - "18080:8080"
     environment:
       - CEREBRAS_API_KEYS
+      - CEREBRAS_COOLDOWN=${CEREBRAS_COOLDOWN:-60}
