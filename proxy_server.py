@@ -94,9 +94,18 @@ class ProxyServer:
                 if not body:
                     return None
                 try:
+                    # First, try to parse as JSON
                     return json.loads(body.decode('utf-8'))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    # If not JSON or not UTF-8, store as base64
+                except json.JSONDecodeError:
+                    # Not JSON, try to decode as plain text (e.g., SSE streaming)
+                    try:
+                        return body.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # Not valid UTF-8, store as base64 binary
+                        import base64
+                        return {"_binary": base64.b64encode(body).decode('ascii')}
+                except UnicodeDecodeError:
+                    # Not valid UTF-8, store as base64 binary
                     import base64
                     return {"_binary": base64.b64encode(body).decode('ascii')}
 
