@@ -15,13 +15,17 @@ class IncomingKeyManager:
     """
 
     def __init__(self, db_path: str = "./data/incoming_keys.db"):
-        self.db_path = db_path
+        # Convert to absolute path and ensure it's a Path object
+        self.db_path = str(Path(db_path).resolve())
         self._init_database()
 
     def _init_database(self):
         """Initialize the SQLite database with the api_keys table."""
         # Create directory if it doesn't exist
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        db_dir = Path(self.db_path).parent
+        if not db_dir.exists():
+            logger.info(f"Creating database directory: {db_dir}")
+            db_dir.mkdir(parents=True, exist_ok=True)
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
