@@ -12,5 +12,10 @@ services:
       - CEREBRAS_COOLDOWN=${CEREBRAS_COOLDOWN:-60}
       - LOG_REQUESTS=${LOG_REQUESTS:-true}
       - LOG_DIR=${LOG_DIR:-/app/logs}
+      - ENABLE_INCOMING_AUTH=${ENABLE_INCOMING_AUTH:-false}
+      - INCOMING_KEY_DB=${INCOMING_KEY_DB:-/app/data/incoming_keys.db}
+      - SYNTHETIC_API_KEY=${SYNTHETIC_API_KEY}
+      - ZAI_API_KEY=${ZAI_API_KEY}
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
