@@ -26,7 +26,13 @@ SYNTHETIC_API_HOST = "https://api.synthetic.new/openai/v1/"
 SYNTHETIC_MODEL = "hf:zai-org/GLM-4.6"
 ZAI_API_HOST = "https://api.z.ai/api/coding/paas/v4/"
 ZAI_MODEL = "glm-4.6"
-MESSAGE_TOKEN_THRESHOLD = 120000  # 120k tokens (~204k characters, approximation: 1 token ≈ 1.7 chars)
+
+# Token estimation threshold based on Content-Length header
+# From empirical analysis: 4.7 bytes/token average
+# 120k tokens * 4.7 = 564,000 bytes (~550 KB)
+TOKEN_THRESHOLD = 120000  # 120k tokens
+BYTES_PER_TOKEN = 4.7
+CONTENT_LENGTH_THRESHOLD = int(TOKEN_THRESHOLD * BYTES_PER_TOKEN)  # 564,000 bytes
 
 # Error codes that trigger key rotation
 ROTATE_KEY_ERROR_CODES = {429, 500}
@@ -70,36 +76,6 @@ class ProxyServer:
         if 'authorization' in sanitized:
             sanitized['authorization'] = '[REDACTED]'
         return sanitized
-
-    def _estimate_message_tokens(self, request_data: Dict[str, Any]) -> int:
-        """
-        Estimate the total token count of user and system message content.
-        Uses approximation: 1 token ≈ 1.7 characters (based on actual Cerebras API data).
-        Only counts 'user' and 'system' role messages, not assistant/tool responses.
-        Returns 0 if no messages are present.
-        """
-        if 'messages' not in request_data or not isinstance(request_data['messages'], list):
-            return 0
-
-        total_chars = 0
-        for msg in request_data['messages']:
-            # Only count user and system messages (actual input, not conversation history)
-            role = msg.get('role', '')
-            if role not in ('user', 'system'):
-                continue
-
-            # Count content field
-            if 'content' in msg:
-                if isinstance(msg['content'], str):
-                    total_chars += len(msg['content'])
-                elif isinstance(msg['content'], list):
-                    # Handle multimodal content (e.g., text + images)
-                    for part in msg['content']:
-                        if isinstance(part, dict) and 'text' in part:
-                            total_chars += len(part['text'])
-
-        # Approximate tokens: 1 token ≈ 1.7 characters (empirically determined from API usage)
-        return int(total_chars / 1.7)
 
     def _fix_missing_tool_responses(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -195,7 +171,7 @@ class ProxyServer:
 
         # Try Synthetic API first
         if self.synthetic_api_key:
-            logger.info(f"Routing large request (~{self._estimate_message_tokens(request_data)} tokens) to Synthetic API")
+            logger.info(f"Routing large request to Synthetic API")
             try:
                 synthetic_url = f"{SYNTHETIC_API_HOST}{path}"
                 synthetic_body = json.dumps(synthetic_request_data, separators=(',', ':')).encode('utf-8')
@@ -418,6 +394,34 @@ class ProxyServer:
 
         target_url = f"{TARGET_API_HOST}{path}"
 
+        # Check Content-Length header for early routing decision (before reading body)
+        content_length = request.headers.get('Content-Length')
+        if content_length and 'chat/completions' in path:
+            try:
+                content_length_int = int(content_length)
+                estimated_tokens = int(content_length_int / BYTES_PER_TOKEN)
+
+                if content_length_int > CONTENT_LENGTH_THRESHOLD:
+                    logger.info(f"Request size ({content_length_int:,} bytes, ~{estimated_tokens:,} tokens) exceeds threshold ({CONTENT_LENGTH_THRESHOLD:,} bytes, {TOKEN_THRESHOLD:,} tokens)")
+
+                    # Read body and parse for routing
+                    request_body = await request.read()
+                    try:
+                        request_data = json.loads(request_body.decode('utf-8'))
+                        logger.info(f"Routing large request to alternative APIs")
+                        return await self._route_to_alternative_api(
+                            request_data=request_data,
+                            path=path,
+                            method=request.method,
+                            original_headers=dict(request.headers),
+                            start_time=start_time,
+                            original_request_body=request_body
+                        )
+                    except json.JSONDecodeError:
+                        logger.warning("Large request is not valid JSON, continuing with Cerebras")
+            except (ValueError, TypeError):
+                pass  # Invalid Content-Length, continue normally
+
         # Read request body once for both forwarding and logging
         request_body = await request.read()
         original_request_body = request_body
@@ -447,19 +451,6 @@ class ProxyServer:
                     request_data_for_routing = fixed_request_data
                 else:
                     request_data_for_routing = request_data
-
-                # Check message token count and route to alternative API if needed
-                estimated_tokens = self._estimate_message_tokens(request_data_for_routing)
-                if estimated_tokens > MESSAGE_TOKEN_THRESHOLD:
-                    logger.info(f"Message content (~{estimated_tokens} tokens) exceeds threshold ({MESSAGE_TOKEN_THRESHOLD} tokens), routing to alternative APIs")
-                    return await self._route_to_alternative_api(
-                        request_data=request_data_for_routing,
-                        path=path,
-                        method=request.method,
-                        original_headers=dict(request.headers),
-                        start_time=start_time,
-                        original_request_body=original_request_body
-                    )
             except json.JSONDecodeError:
                 # Not JSON, continue with normal routing
                 pass
