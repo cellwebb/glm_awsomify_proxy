@@ -11,6 +11,7 @@ import uuid
 import copy
 
 from api_key_manager import ApiKeyManager
+from incoming_key_manager import IncomingKeyManager
 
 
 # Configure logging
@@ -19,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 # Target API host
 TARGET_API_HOST = "https://api.cerebras.ai/v1/"
+
+# Alternative API hosts for large requests (>120k message content)
+SYNTHETIC_API_HOST = "https://api.synthetic.new/openai/v1/"
+SYNTHETIC_MODEL = "hf:zai-org/GLM-4.6"
+ZAI_API_HOST = "https://api.z.ai/api/coding/paas/v4/"
+ZAI_MODEL = "glm-4.6"
+MESSAGE_SIZE_THRESHOLD = 120000  # 120k characters
 
 # Error codes that trigger key rotation
 ROTATE_KEY_ERROR_CODES = {429, 500}
@@ -33,8 +41,12 @@ class ProxyServer:
     A proxy server that forwards requests to the Cerebras API
     with round-robin API key rotation.
     """
-    def __init__(self, api_key_manager: ApiKeyManager):
+    def __init__(self, api_key_manager: ApiKeyManager, incoming_key_manager: IncomingKeyManager = None,
+                 synthetic_api_key: str = None, zai_api_key: str = None):
         self.api_key_manager = api_key_manager
+        self.incoming_key_manager = incoming_key_manager
+        self.synthetic_api_key = synthetic_api_key
+        self.zai_api_key = zai_api_key
         self.app = web.Application()
         # Add status endpoint
         self.app.router.add_get("/_status", self.status_handler)
@@ -57,6 +69,32 @@ class ProxyServer:
         if 'authorization' in sanitized:
             sanitized['authorization'] = '[REDACTED]'
         return sanitized
+
+    def _calculate_message_content_size(self, request_data: Dict[str, Any]) -> int:
+        """
+        Calculate the total character count of all message content in a request.
+        Returns 0 if no messages are present.
+        """
+        if 'messages' not in request_data or not isinstance(request_data['messages'], list):
+            return 0
+
+        total_size = 0
+        for msg in request_data['messages']:
+            # Count content field
+            if 'content' in msg:
+                if isinstance(msg['content'], str):
+                    total_size += len(msg['content'])
+                elif isinstance(msg['content'], list):
+                    # Handle multimodal content (e.g., text + images)
+                    for part in msg['content']:
+                        if isinstance(part, dict) and 'text' in part:
+                            total_size += len(part['text'])
+
+            # Count tool_calls if present
+            if 'tool_calls' in msg:
+                total_size += len(json.dumps(msg['tool_calls']))
+
+        return total_size
 
     def _fix_missing_tool_responses(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -127,6 +165,122 @@ class ProxyServer:
         fixed_request_data = copy.deepcopy(request_data)
         fixed_request_data['messages'] = fixed_messages
         return fixed_request_data
+
+    async def _route_to_alternative_api(
+        self,
+        request_data: Dict[str, Any],
+        path: str,
+        method: str,
+        original_headers: Dict[str, str],
+        start_time: datetime,
+        original_request_body: bytes
+    ) -> web.Response:
+        """
+        Route large requests to alternative APIs with fallback logic.
+        First tries Synthetic API, then falls back to Z.ai API if that fails.
+        """
+        # Prepare modified request data with model change
+        synthetic_request_data = copy.deepcopy(request_data)
+        if 'model' in synthetic_request_data:
+            synthetic_request_data['model'] = SYNTHETIC_MODEL
+
+        zai_request_data = copy.deepcopy(request_data)
+        if 'model' in zai_request_data:
+            zai_request_data['model'] = ZAI_MODEL
+
+        # Try Synthetic API first
+        if self.synthetic_api_key:
+            logger.info(f"Routing large request ({self._calculate_message_content_size(request_data)} chars) to Synthetic API")
+            try:
+                synthetic_url = f"{SYNTHETIC_API_HOST}{path}"
+                synthetic_body = json.dumps(synthetic_request_data, separators=(',', ':')).encode('utf-8')
+
+                headers = {key: value for key, value in original_headers.items()
+                          if key.lower() not in ('authorization', 'host', 'content-length')}
+                headers["Authorization"] = f"Bearer {self.synthetic_api_key}"
+                headers["User-Agent"] = "Cerebras-Proxy/1.0"
+                headers["Content-Length"] = str(len(synthetic_body))
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.request(method, synthetic_url, headers=headers, data=synthetic_body) as resp:
+                        body = await resp.read()
+
+                        # If successful, return immediately
+                        if resp.status < 400:
+                            logger.info(f"Synthetic API request succeeded with status {resp.status}")
+                            response = web.Response(
+                                status=resp.status,
+                                body=body,
+                                headers={key: value for key, value in resp.headers.items()
+                                        if key.lower() not in ('content-length', 'transfer-encoding', 'content-encoding')}
+                            )
+
+                            # Log request/response
+                            end_time = datetime.utcnow()
+                            duration_ms = (end_time - start_time).total_seconds() * 1000
+                            await self._save_request_response_log(
+                                request_method=method,
+                                request_path=f"[SYNTHETIC] {path}",
+                                request_headers=original_headers,
+                                request_body=original_request_body,
+                                response_status=resp.status,
+                                response_headers=dict(resp.headers),
+                                response_body=body,
+                                duration_ms=duration_ms
+                            )
+                            return response
+                        else:
+                            logger.warning(f"Synthetic API returned error {resp.status}, falling back to Z.ai API")
+            except Exception as e:
+                logger.warning(f"Synthetic API failed with error: {e}, falling back to Z.ai API")
+        else:
+            logger.warning("Synthetic API key not configured, skipping to Z.ai API")
+
+        # Fallback to Z.ai API
+        if self.zai_api_key:
+            logger.info(f"Routing request to Z.ai API (fallback)")
+            try:
+                zai_url = f"{ZAI_API_HOST}{path}"
+                zai_body = json.dumps(zai_request_data, separators=(',', ':')).encode('utf-8')
+
+                headers = {key: value for key, value in original_headers.items()
+                          if key.lower() not in ('authorization', 'host', 'content-length')}
+                headers["Authorization"] = f"Bearer {self.zai_api_key}"
+                headers["User-Agent"] = "Cerebras-Proxy/1.0"
+                headers["Content-Length"] = str(len(zai_body))
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.request(method, zai_url, headers=headers, data=zai_body) as resp:
+                        body = await resp.read()
+
+                        logger.info(f"Z.ai API request completed with status {resp.status}")
+                        response = web.Response(
+                            status=resp.status,
+                            body=body,
+                            headers={key: value for key, value in resp.headers.items()
+                                    if key.lower() not in ('content-length', 'transfer-encoding', 'content-encoding')}
+                        )
+
+                        # Log request/response
+                        end_time = datetime.utcnow()
+                        duration_ms = (end_time - start_time).total_seconds() * 1000
+                        await self._save_request_response_log(
+                            request_method=method,
+                            request_path=f"[ZAI] {path}",
+                            request_headers=original_headers,
+                            request_body=original_request_body,
+                            response_status=resp.status,
+                            response_headers=dict(resp.headers),
+                            response_body=body,
+                            duration_ms=duration_ms
+                        )
+                        return response
+            except Exception as e:
+                logger.error(f"Z.ai API failed with error: {e}")
+                return web.Response(status=503, text=f"All alternative APIs failed: {e}")
+        else:
+            logger.error("Z.ai API key not configured")
+            return web.Response(status=503, text="No alternative APIs configured")
 
     async def _save_request_response_log(
         self,
@@ -222,6 +376,35 @@ class ProxyServer:
         """
         start_time = datetime.utcnow()
 
+        # Verify incoming API key if key management is enabled
+        if self.incoming_key_manager:
+            auth_header = request.headers.get('Authorization', '')
+            if not auth_header:
+                logger.warning("Request rejected: Missing Authorization header")
+                return web.Response(
+                    status=401,
+                    text='{"error": {"message": "Missing Authorization header", "type": "invalid_request_error", "code": "missing_authorization"}}'
+                )
+
+            # Extract the API key from "Bearer <key>" format
+            parts = auth_header.split()
+            if len(parts) != 2 or parts[0].lower() != 'bearer':
+                logger.warning("Request rejected: Invalid Authorization header format")
+                return web.Response(
+                    status=401,
+                    text='{"error": {"message": "Invalid Authorization header format", "type": "invalid_request_error", "code": "invalid_authorization"}}'
+                )
+
+            incoming_api_key = parts[1]
+
+            # Verify the API key
+            if not self.incoming_key_manager.verify_api_key(incoming_api_key):
+                logger.warning(f"Request rejected: Invalid or revoked API key: {incoming_api_key[:10]}...")
+                return web.Response(
+                    status=401,
+                    text='{"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}'
+                )
+
         path = request.match_info["path"]
 
         # Avoid /v1/v1 duplication if the request path already includes v1/
@@ -235,6 +418,7 @@ class ProxyServer:
         original_request_body = request_body
 
         # Apply tool_call validation fix for chat completion requests (ALWAYS ENABLED)
+        request_data_for_routing = None
         if 'chat/completions' in path and request_body:
             try:
                 request_data = json.loads(request_body.decode('utf-8'))
@@ -255,6 +439,25 @@ class ProxyServer:
 
                     request_body = fixed_body
                     logger.info(f"Applied tool_call fix: {original_msg_count} -> {fixed_msg_count} messages (size: {len(original_request_body)} -> {len(fixed_body)} bytes)")
+                    request_data_for_routing = fixed_request_data
+                else:
+                    request_data_for_routing = request_data
+
+                # Check message size and route to alternative API if needed
+                message_size = self._calculate_message_content_size(request_data_for_routing)
+                if message_size > MESSAGE_SIZE_THRESHOLD:
+                    logger.info(f"Message content size ({message_size} chars) exceeds threshold ({MESSAGE_SIZE_THRESHOLD}), routing to alternative APIs")
+                    return await self._route_to_alternative_api(
+                        request_data=request_data_for_routing,
+                        path=path,
+                        method=request.method,
+                        original_headers=dict(request.headers),
+                        start_time=start_time,
+                        original_request_body=original_request_body
+                    )
+            except json.JSONDecodeError:
+                # Not JSON, continue with normal routing
+                pass
             except Exception as e:
                 logger.error(f"Tool call fix failed: {e}", exc_info=True)
                 request_body = original_request_body
@@ -293,7 +496,7 @@ class ProxyServer:
                                 status=resp.status,
                                 body=body,
                                 headers={key: value for key, value in resp.headers.items()
-                                         if key.lower() not in ('content-length', 'transfer-encoding')}
+                                         if key.lower() not in ('content-length', 'transfer-encoding', 'content-encoding')}
                             )
 
                             # Handle rate limiting
@@ -337,7 +540,7 @@ class ProxyServer:
                                 status=resp.status,
                                 body=body,
                                 headers={key: value for key, value in resp.headers.items()
-                                         if key.lower() not in ('content-length', 'transfer-encoding')}
+                                         if key.lower() not in ('content-length', 'transfer-encoding', 'content-encoding')}
                             )
 
                             # Handle rate limiting
@@ -428,8 +631,32 @@ async def main():
     api_key_manager = ApiKeyManager(api_keys, cooldown_seconds=cooldown_seconds)
     logger.info("Created API key manager successfully")
 
+    # Get alternative API keys for large requests
+    synthetic_api_key = os.environ.get("SYNTHETIC_API_KEY")
+    zai_api_key = os.environ.get("ZAI_API_KEY")
+
+    if synthetic_api_key:
+        logger.info("Synthetic API key configured for large requests (>120k chars)")
+    if zai_api_key:
+        logger.info("Z.ai API key configured as fallback for large requests")
+
+    # Create incoming API key manager (optional)
+    incoming_key_manager = None
+    enable_incoming_auth = os.environ.get("ENABLE_INCOMING_AUTH", "false").lower() == "true"
+    if enable_incoming_auth:
+        incoming_key_db = os.environ.get("INCOMING_KEY_DB", "./data/incoming_keys.db")
+        incoming_key_manager = IncomingKeyManager(incoming_key_db)
+        logger.info(f"Incoming API key authentication enabled. Database: {incoming_key_db}")
+    else:
+        logger.info("Incoming API key authentication disabled (set ENABLE_INCOMING_AUTH=true to enable)")
+
     # Create and run the proxy server
-    proxy = ProxyServer(api_key_manager)
+    proxy = ProxyServer(
+        api_key_manager,
+        incoming_key_manager=incoming_key_manager,
+        synthetic_api_key=synthetic_api_key,
+        zai_api_key=zai_api_key
+    )
     logger.info("About to call proxy.run() with proper event loop integration")
     await proxy.run()
 
