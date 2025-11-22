@@ -6,6 +6,7 @@ A smart proxy server for Cerebras API with intelligent key rotation, request rou
 
 - 🔄 **Smart API Key Rotation** - Automatic rotation on rate limits (429) with cooldown tracking
 - 🚀 **Strategic Routing** - Routes large requests (>120k chars) to alternative APIs (Synthetic/Z.ai)
+- ⚡ **Fallback on Cooldown** - Routes to alternative APIs when all Cerebras keys are rate-limited
 - 🔐 **Incoming API Key Management** - SQLite-based authentication for client requests
 - 🛠️ **Auto Tool Call Validation** - Fixes missing tool responses automatically
 - 📝 **Request/Response Logging** - Optional filesystem logging for debugging
@@ -107,6 +108,29 @@ ZAI_API_KEY=sk-your-zai-key
 
 Normal-sized requests continue using Cerebras API.
 
+## Fallback on Cooldown
+
+When all Cerebras API keys are rate-limited, enable automatic fallback to alternative APIs instead of waiting for cooldown.
+
+### Enable Fallback
+
+Set in `.env`:
+```bash
+FALLBACK_ON_COOLDOWN=true
+SYNTHETIC_API_KEY=sk-your-synthetic-key
+ZAI_API_KEY=sk-your-zai-key
+```
+
+### How It Works
+
+**Without Fallback (default):**
+- All Cerebras keys hit rate limit → Wait 60s for cooldown → Retry
+
+**With Fallback enabled:**
+- All Cerebras keys hit rate limit → Route to Synthetic API → Falls back to Z.ai if needed → Instant response ⚡
+
+**Use Case:** During high-traffic periods when all Cerebras keys are exhausted, this provides faster response times by utilizing alternative APIs instead of waiting.
+
 ## Configuration
 
 ### Environment Variables
@@ -119,6 +143,7 @@ Normal-sized requests continue using Cerebras API.
 | `INCOMING_KEY_DB` | `./data/incoming_keys.db` | SQLite database path |
 | `SYNTHETIC_API_KEY` | - | API key for Synthetic API |
 | `ZAI_API_KEY` | - | API key for Z.ai API |
+| `FALLBACK_ON_COOLDOWN` | `false` | Route to alternative APIs when all Cerebras keys are rate-limited |
 | `LOG_REQUESTS` | `true` | Enable request/response logging |
 | `LOG_DIR` | `./logs` | Directory for log files |
 
@@ -148,7 +173,13 @@ Client Request
     ↓
 > 120k chars? → Route to Synthetic API → Fails? → Route to Z.ai API
     ↓
-< 120k chars? → Route to Cerebras API (with smart rotation)
+< 120k chars? → [Check if all Cerebras keys rate-limited]
+    ↓                                    ↓
+    ↓                    Yes + FALLBACK_ON_COOLDOWN=true?
+    ↓                                    ↓
+    ↓                         Route to Synthetic/Z.ai API
+    ↓
+    ↓  No or disabled → Route to Cerebras API (with smart rotation/wait)
     ↓
 [Fix Tool Calls if needed]
     ↓
