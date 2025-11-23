@@ -522,10 +522,36 @@ class ProxyServer:
                             if resp.status == 429:
                                 logger.warning(f"Rate limited (429), marking key and switching...")
                                 await self.api_key_manager.mark_key_rate_limited(api_key)
+
+                                # Check if all keys are now rate-limited and fallback is enabled
+                                if self.fallback_on_cooldown and await self.api_key_manager.all_keys_rate_limited():
+                                    if (self.synthetic_api_key or self.zai_api_key) and request_data_for_routing:
+                                        logger.warning("All Cerebras keys now rate-limited after 429. Falling back to alternative APIs.")
+                                        return await self._route_to_alternative_api(
+                                            request_data=request_data_for_routing,
+                                            path=path,
+                                            method=method,
+                                            original_headers=dict(request.headers),
+                                            start_time=start_time,
+                                            original_request_body=original_request_body
+                                        )
                                 continue
                             elif resp.status == 500:
                                 logger.warning(f"Server error (500), trying next key...")
                                 await self.api_key_manager.mark_key_rate_limited(api_key)
+
+                                # Check if all keys are now rate-limited and fallback is enabled
+                                if self.fallback_on_cooldown and await self.api_key_manager.all_keys_rate_limited():
+                                    if (self.synthetic_api_key or self.zai_api_key) and request_data_for_routing:
+                                        logger.warning("All Cerebras keys now rate-limited after 500. Falling back to alternative APIs.")
+                                        return await self._route_to_alternative_api(
+                                            request_data=request_data_for_routing,
+                                            path=path,
+                                            method=method,
+                                            original_headers=dict(request.headers),
+                                            start_time=start_time,
+                                            original_request_body=original_request_body
+                                        )
                                 continue
                             elif resp.status == 400:
                                 # Check if this is a context_length_exceeded error
@@ -600,10 +626,36 @@ class ProxyServer:
                             if resp.status == 429:
                                 logger.warning(f"Rate limited (429), marking key and switching...")
                                 await self.api_key_manager.mark_key_rate_limited(api_key)
+
+                                # Check if all keys are now rate-limited and fallback is enabled
+                                if self.fallback_on_cooldown and await self.api_key_manager.all_keys_rate_limited():
+                                    if (self.synthetic_api_key or self.zai_api_key) and request_data_for_routing:
+                                        logger.warning("All Cerebras keys now rate-limited after 429. Falling back to alternative APIs.")
+                                        return await self._route_to_alternative_api(
+                                            request_data=request_data_for_routing,
+                                            path=path,
+                                            method=method,
+                                            original_headers=dict(request.headers),
+                                            start_time=start_time,
+                                            original_request_body=original_request_body
+                                        )
                                 continue
                             elif resp.status == 500:
                                 logger.warning(f"Server error (500), trying next key...")
                                 await self.api_key_manager.mark_key_rate_limited(api_key)
+
+                                # Check if all keys are now rate-limited and fallback is enabled
+                                if self.fallback_on_cooldown and await self.api_key_manager.all_keys_rate_limited():
+                                    if (self.synthetic_api_key or self.zai_api_key) and request_data_for_routing:
+                                        logger.warning("All Cerebras keys now rate-limited after 500. Falling back to alternative APIs.")
+                                        return await self._route_to_alternative_api(
+                                            request_data=request_data_for_routing,
+                                            path=path,
+                                            method=method,
+                                            original_headers=dict(request.headers),
+                                            start_time=start_time,
+                                            original_request_body=original_request_body
+                                        )
                                 continue
                             elif resp.status == 400:
                                 # Check if this is a context_length_exceeded error

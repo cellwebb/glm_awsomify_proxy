@@ -130,9 +130,14 @@ ZAI_API_KEY=sk-your-zai-key
 - All Cerebras keys hit rate limit → Wait 60s for cooldown → Retry
 
 **With Fallback enabled:**
-- All Cerebras keys hit rate limit → Route to Synthetic API → Falls back to Z.ai if needed → Instant response ⚡
+- Key gets 429/500 → Marked as rate-limited
+- All Cerebras keys now rate-limited? → Instantly route to Synthetic API → Falls back to Z.ai if needed → ⚡ No waiting!
 
-**Use Case:** During high-traffic periods when all Cerebras keys are exhausted, this provides faster response times by utilizing alternative APIs instead of waiting.
+**Trigger Points:**
+1. Before retry loop: If all keys already rate-limited
+2. **Inside retry loop**: After marking a key as rate-limited (429/500), checks if all keys are now exhausted
+
+**Use Case:** During high-traffic periods when all Cerebras keys are exhausted, this provides faster response times by utilizing alternative APIs instead of waiting for cooldowns.
 
 ## Smart Error Handling
 
