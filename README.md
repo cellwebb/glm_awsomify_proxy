@@ -65,8 +65,10 @@ python manage_keys.py add "Client Name"
 # List all API keys with usage stats
 python manage_keys.py list
 
-# Revoke an API key
-python manage_keys.py revoke sk-abc123...
+# Revoke an API key (by API key, ID, or name)
+python manage_keys.py revoke sk-abc123...     # by API key
+python manage_keys.py revoke 5                # by ID from list output
+python manage_keys.py revoke "Client Name"    # by name
 
 # View statistics
 python manage_keys.py stats
@@ -80,6 +82,9 @@ docker-compose exec cerebras-proxy python manage_keys.py add "Client Name"
 
 # List keys
 docker-compose exec cerebras-proxy python manage_keys.py list
+
+# Revoke key (by API key, ID, or name)
+docker-compose exec cerebras-proxy python manage_keys.py revoke 5
 ```
 
 ### Client Usage

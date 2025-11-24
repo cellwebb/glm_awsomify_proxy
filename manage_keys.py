@@ -56,13 +56,31 @@ def cmd_list(args):
 
 
 def cmd_revoke(args):
-    """Revoke an API key."""
+    """Revoke an API key by ID, name, or API key."""
     manager = IncomingKeyManager(args.db)
+    identifier = args.identifier
+    success = False
+    revoke_type = ""
 
-    if manager.revoke_api_key(args.key):
-        print(f"\n✓ API Key revoked successfully: {args.key[:20]}...\n")
+    # Detect what type of identifier was provided
+    if identifier.isdigit():
+        # It's an ID
+        key_id = int(identifier)
+        success = manager.revoke_by_id(key_id)
+        revoke_type = f"ID {key_id}"
+    elif identifier.startswith("sk-"):
+        # It's an API key
+        success = manager.revoke_api_key(identifier)
+        revoke_type = f"API key {identifier[:20]}..."
     else:
-        print(f"\n✗ Failed to revoke key (not found or already revoked): {args.key[:20]}...\n")
+        # It's a name
+        success = manager.revoke_by_name(identifier)
+        revoke_type = f"name '{identifier}'"
+
+    if success:
+        print(f"\n✓ API Key revoked successfully by {revoke_type}\n")
+    else:
+        print(f"\n✗ Failed to revoke key by {revoke_type} (not found or already revoked)\n")
         sys.exit(1)
 
 
@@ -92,8 +110,14 @@ Examples:
   # List all API keys
   python manage_keys.py list
 
-  # Revoke an API key
+  # Revoke an API key (by API key)
   python manage_keys.py revoke sk-abc123...
+
+  # Revoke an API key (by ID from list output)
+  python manage_keys.py revoke 5
+
+  # Revoke an API key (by name)
+  python manage_keys.py revoke "Client Name"
 
   # Show statistics
   python manage_keys.py stats
@@ -116,8 +140,8 @@ Examples:
     parser_list.set_defaults(func=cmd_list)
 
     # Revoke command
-    parser_revoke = subparsers.add_parser('revoke', help='Revoke an API key')
-    parser_revoke.add_argument('key', help='API key to revoke')
+    parser_revoke = subparsers.add_parser('revoke', help='Revoke an API key by ID, name, or API key')
+    parser_revoke.add_argument('identifier', help='API key, ID (number), or name to revoke')
     parser_revoke.set_defaults(func=cmd_revoke)
 
     # Stats command

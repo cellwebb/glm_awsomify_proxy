@@ -156,6 +156,68 @@ class IncomingKeyManager:
         finally:
             conn.close()
 
+    def revoke_by_id(self, key_id: int) -> bool:
+        """
+        Revoke an API key by its ID.
+
+        Args:
+            key_id: The ID of the API key to revoke
+
+        Returns:
+            True if successfully revoked, False if key doesn't exist
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                UPDATE api_keys
+                SET revoked = 1, revoked_at = ?
+                WHERE id = ? AND revoked = 0
+            """, (datetime.utcnow().isoformat(), key_id))
+
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                logger.info(f"Revoked API key by ID: {key_id}")
+                return True
+            else:
+                logger.warning(f"Attempted to revoke non-existent or already revoked key with ID: {key_id}")
+                return False
+        finally:
+            conn.close()
+
+    def revoke_by_name(self, name: str) -> bool:
+        """
+        Revoke an API key by its name.
+
+        Args:
+            name: The name of the API key to revoke
+
+        Returns:
+            True if successfully revoked, False if key doesn't exist
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                UPDATE api_keys
+                SET revoked = 1, revoked_at = ?
+                WHERE name = ? AND revoked = 0
+            """, (datetime.utcnow().isoformat(), name))
+
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                logger.info(f"Revoked API key by name: {name}")
+                return True
+            else:
+                logger.warning(f"Attempted to revoke non-existent or already revoked key with name: {name}")
+                return False
+        finally:
+            conn.close()
+
     def list_api_keys(self) -> List[Dict[str, Any]]:
         """
         List all API keys (both active and revoked).
