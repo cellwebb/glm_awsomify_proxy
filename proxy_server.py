@@ -688,13 +688,41 @@ class ProxyServer:
 
                             # Handle rate limiting
                             if resp.status == 429:
-                                logger.warning(f"Rate limited (429), marking key and switching...")
-                                await self.api_key_manager.mark_key_rate_limited(api_key)
+                                # Check if this is a daily limit error
+                                try:
+                                    error_body = body.decode('utf-8')
+                                    if "tokens-per-day limit" in error_body:
+                                        logger.warning(f"Daily limit reached (429), marking key disabled until 0:00 UTC...")
+                                        await self.api_key_manager.mark_key_daily_limit_reached(api_key)
+                                    else:
+                                        logger.warning(f"Rate limited (429), marking key and switching...")
+                                        await self.api_key_manager.mark_key_rate_limited(api_key)
+                                except Exception:
+                                    logger.warning(f"Rate limited (429), marking key and switching...")
+                                    await self.api_key_manager.mark_key_rate_limited(api_key)
 
                                 # Check if all keys are now rate-limited and fallback is enabled
                                 if self.fallback_on_cooldown and await self.api_key_manager.all_keys_rate_limited():
                                     if (self.synthetic_api_key or self.zai_api_key) and request_data_for_routing:
                                         logger.warning("All Cerebras keys now rate-limited after 429. Falling back to alternative APIs.")
+                                        return await self._route_to_alternative_api(
+                                            request_data=request_data_for_routing,
+                                            path=path,
+                                            method=method,
+                                            original_headers=dict(request.headers),
+                                            start_time=start_time,
+                                            original_request_body=original_request_body
+                                        )
+                                continue
+                            elif resp.status == 402:
+                                # Handle Payment Required / Quota Exceeded as daily limit
+                                logger.warning(f"Quota exceeded (402), marking key disabled until 0:00 UTC...")
+                                await self.api_key_manager.mark_key_daily_limit_reached(api_key)
+                                
+                                # Check if all keys are now rate-limited and fallback is enabled
+                                if self.fallback_on_cooldown and await self.api_key_manager.all_keys_rate_limited():
+                                    if (self.synthetic_api_key or self.zai_api_key) and request_data_for_routing:
+                                        logger.warning("All Cerebras keys now rate-limited after 402. Falling back to alternative APIs.")
                                         return await self._route_to_alternative_api(
                                             request_data=request_data_for_routing,
                                             path=path,

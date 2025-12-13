@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
@@ -108,6 +109,37 @@ class ApiKeyManager:
                     logger.warning(f"Key '{state.name}' rate-limited until "
                                  f"{time.strftime('%H:%M:%S', time.localtime(state.rate_limited_until))} "
                                  f"(error count: {state.error_count})")
+
+                    # Rotate to next key
+                    self._current_index = (self._current_index + 1) % len(self._key_states)
+                    next_key = self._key_states[self._current_index]
+                    logger.info(f"Rotating to key '{next_key.name}'")
+                    break
+
+    async def mark_key_daily_limit_reached(self, api_key: str) -> None:
+        """
+        Marks a key as rate-limited until the next 0:00 UTC reset.
+        
+        Args:
+            api_key: The API key that reached the daily limit.
+        """
+        async with self._lock:
+            # Find the key state
+            for state in self._key_states:
+                if state.key == api_key:
+                    # Calculate time until next 0:00 UTC
+                    now = datetime.now(timezone.utc)
+                    next_reset = (now + timedelta(days=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    
+                    # Set rate limited until that time
+                    state.rate_limited_until = next_reset.timestamp()
+                    state.error_count += 1
+                    
+                    wait_hours = (state.rate_limited_until - time.time()) / 3600
+                    logger.warning(f"Key '{state.name}' hit DAILY limit. Disabled for {wait_hours:.1f} hours "
+                                 f"until {next_reset.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
                     # Rotate to next key
                     self._current_index = (self._current_index + 1) % len(self._key_states)
