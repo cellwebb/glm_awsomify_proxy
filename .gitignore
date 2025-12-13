@@ -2,6 +2,9 @@
 *.json
 logs/
 
+# Runtime data
+data/*.db
+
 # Python
 __pycache__/
 *.py[cod]
@@ -34,6 +37,7 @@ wheels/
 # IDE
 .vscode/
 .idea/
+.serena/
 *.swp
 *.swo
 *~
