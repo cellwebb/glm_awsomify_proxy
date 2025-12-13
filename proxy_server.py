@@ -23,8 +23,8 @@ TARGET_API_HOST = "https://api.cerebras.ai/v1/"
 
 # Alternative API hosts for large requests (configurable token threshold)
 SYNTHETIC_API_HOST = "https://api.synthetic.new/openai/v1/"
-SYNTHETIC_MODEL = "hf:zai-org/GLM-4.6"
-SYNTHETIC_VISION_MODEL = "hf:Qwen/Qwen3-VL-235B-A22B-Instruct"
+SYNTHETIC_MODEL = os.environ.get("SYNTHETIC_MODEL", "hf:zai-org/GLM-4.6")
+SYNTHETIC_VISION_MODEL = os.environ.get("SYNTHETIC_VISION_MODEL", "hf:Qwen/Qwen3-VL-235B-A22B-Instruct")
 ZAI_API_HOST = "https://api.z.ai/api/coding/paas/v4/"
 ZAI_MODEL = "glm-4.6"
 
