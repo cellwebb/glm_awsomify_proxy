@@ -234,6 +234,8 @@ The proxy automatically routes to alternative APIs when Cerebras encounters cert
 | `ENABLE_INCOMING_AUTH` | `false` | Enable client API key authentication |
 | `INCOMING_KEY_DB` | `./data/incoming_keys.db` | SQLite database path |
 | `SYNTHETIC_API_KEY` | - | API key for Synthetic API |
+| `SYNTHETIC_MODEL` | `hf:zai-org/GLM-4.6` | Synthetic API model for large requests |
+| `SYNTHETIC_VISION_MODEL` | `hf:Qwen/Qwen3-VL-235B-A22B-Instruct` | Synthetic API vision model for image requests |
 | `ZAI_API_KEY` | - | API key for Z.ai API |
 | `FALLBACK_ON_COOLDOWN` | `false` | Route to alternative APIs when all Cerebras keys are rate-limited |
 | `LOG_REQUESTS` | `true` | Enable request/response logging |
